@@ -1,28 +1,31 @@
 use std::collections::HashMap;
-use std::time::SystemTime;
+use chrono::Utc;
+use log::debug;
 
 use crate::transfer_ticket::TransferTicket;
 use crate::types::{Bytes, TimestampMs};
 
-pub struct BandwidthEntry {
-    pub amount_of_bytes: Bytes
+pub fn get_unix_time_ms() -> TimestampMs {
+    let now = Utc::now();
+    now.timestamp_millis() as TimestampMs
 }
 
+#[derive(Clone, Debug)]
 pub struct BandwidthMeasure {
-    start_time: SystemTime,
+    start_time: TimestampMs,
     entries: HashMap<TimestampMs, Bytes>,
 }
 
 impl BandwidthMeasure {
     pub fn new() -> Self {
         return Self {
-            start_time: SystemTime::now(),
+            start_time: get_unix_time_ms(),
             entries: HashMap::new()
         }
     }
 
     fn current_duration(&self) -> TimestampMs {
-        return SystemTime::now().duration_since(self.start_time).unwrap().as_millis() as u32
+        return get_unix_time_ms() - self.start_time
     }
 
     fn clean_old_entries(&mut self) {
@@ -34,8 +37,11 @@ impl BandwidthMeasure {
 
     pub fn get_kbps(&mut self) -> f32 {
         self.clean_old_entries();
+        if self.entries.is_empty() {
+            return 0.0;
+        }
         let sum = self.entries.values().sum::<Bytes>();
-        let result = (sum as f32) / 1000.0;
+        let result = (sum as f32) / 1000.0 / (self.entries.len() as f32);
         return result;
     }
 
@@ -50,8 +56,17 @@ impl BandwidthMeasure {
     pub fn add_bytes_end(&mut self, ticket: TransferTicket) {
         let current_duration = self.current_duration();
         let total_duration = current_duration - ticket.timestamp_start;
-        let bytes_per_second = (((ticket.amount_of_bytes as f32) / (total_duration as f32)) * 1000.0) as usize;
+        let bytes_per_second = if total_duration > 1000 {
+            (((ticket.amount_of_bytes as f32) / (total_duration as f32)) * 1000.0) as usize
+        } else {
+            ticket.amount_of_bytes
+        };
         let current_bytes = self.entries.entry(current_duration).or_default();
         *current_bytes += bytes_per_second;
+    }
+
+    pub fn add_bytes(&mut self, bytes: usize) {
+        let ticket = self.add_bytes_start(bytes);
+        self.add_bytes_end(ticket);
     }
 }
